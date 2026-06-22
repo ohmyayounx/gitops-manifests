@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: itsm-config
+  namespace: production
+data:
+  PORT: "8080"
+  MIGRATION_PATH: "file://migrations"
+  BASE_URL: "https://itsm.pcsindonesia.com"
+  APP_EMAIL_SMTP_HOST: "mail.privateemail.com"
+  APP_EMAIL_SMTP_PORT: "587"
+  APP_EMAIL_SMTP_USER: "noreply@pcsindonesia.com"
+  APP_EMAIL_SENDER_EMAIL: "noreply@pcsindonesia.com"
+  KEYCLOAK_URL: "https://jupyter.pcsindonesia.com"
+  KEYCLOAK_REALM: "sso-internal"
+  KEYCLOAK_CLIENT_ID: "itsm-app"
+  POSE_API_URL: "https://pose-api.pcsindonesia.co.id/master/user?filter=pcsindonesia.co.id&order=created_at:-1&page_size=-1&page=1"

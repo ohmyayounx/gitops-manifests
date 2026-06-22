@@ -14,17 +14,80 @@ spec:
         app: backend
     spec:
       containers:
-      - name: backend
-        image: ghcr.io/ay0unx/itsm-backend:latest
-        ports:
-        - containerPort: 8080
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "256Mi"
-            cpu: "200m"
+        - name: backend
+          image: ghcr.io/ay0unx/itsm-backend:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: DB_PASSWORD
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: DB_NAME
+            - name: DATABASE_URL
+              value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/$(DB_NAME)?sslmode=disable"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: JWT_SECRET
+            - name: JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: JWT_REFRESH_SECRET
+            - name: WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: WEBHOOK_SECRET
+            - name: POSE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: POSE_API_TOKEN
+            - name: PRITUNL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: PRITUNL_USERNAME
+            - name: PRITUNL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: PRITUNL_PASSWORD
+          envFrom:
+            - configMapRef:
+                name: itsm-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
 ---
 apiVersion: v1
 kind: Service
@@ -35,5 +98,5 @@ spec:
   selector:
     app: backend
   ports:
-  - port: 8080
-    targetPort: 8080
+    - port: 8080
+      targetPort: 8080
