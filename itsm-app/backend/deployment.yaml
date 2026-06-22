@@ -19,23 +19,11 @@ spec:
           ports:
             - containerPort: 8080
           env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: DB_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: DB_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: DB_NAME
             - name: DATABASE_URL
-              value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/$(DB_NAME)?sslmode=disable"
+              valueFrom:
+                secretKeyRef:
+                  name: itsm-secrets
+                  key: DATABASE_URL
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
