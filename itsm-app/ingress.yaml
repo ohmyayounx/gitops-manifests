@@ -4,10 +4,9 @@ metadata:
   name: itsm-ingress
   namespace: production-itsm
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-    nginx.ingress.kubernetes.io/use-regex: "true"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
     - host: itsm.pcsindonesia.com
       http:
