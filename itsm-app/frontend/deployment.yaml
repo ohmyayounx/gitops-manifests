@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: production
+  namespace: production-itsm
 spec:
   replicas: 2
   selector:
@@ -36,7 +36,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend
-  namespace: production
+  namespace: production-itsm
 spec:
   selector:
     app: frontend
