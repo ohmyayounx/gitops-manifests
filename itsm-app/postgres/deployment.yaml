@@ -4,7 +4,7 @@ metadata:
   name: postgres
   namespace: production-itsm
 spec:
-  serviceName: postgres-headless
+  serviceName: postgres
   replicas: 1
   selector:
     matchLabels:
@@ -59,21 +59,7 @@ spec:
           requests:
             storage: 10Gi
 ---
-# Headless service required by StatefulSet
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres-headless
-  namespace: production-itsm
-spec:
-  clusterIP: None
-  selector:
-    app: postgres
-  ports:
-    - port: 5432
-      targetPort: 5432
----
-# ClusterIP service for backend to connect via DNS: postgres.production-itsm.svc.cluster.local
+# ClusterIP service - provides DNS: postgres.production-itsm.svc.cluster.local
 apiVersion: v1
 kind: Service
 metadata:
