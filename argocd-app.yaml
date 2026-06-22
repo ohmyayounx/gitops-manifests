@@ -9,6 +9,8 @@ spec:
     repoURL: https://github.com/ohmyayounx/gitops-manifests.git
     targetRevision: main
     path: itsm-app
+    directory:
+      recurse: true
   destination:
     server: https://139.180.191.232:6443
     namespace: production-itsm
