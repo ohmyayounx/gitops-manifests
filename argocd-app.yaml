@@ -10,8 +10,8 @@ spec:
     targetRevision: main
     path: itsm-app
   destination:
-    server: https://kubernetes.default.svc
-    namespace: production
+    server: https://139.180.191.232:6443
+    namespace: production-itsm
   syncPolicy:
     automated:
       prune: true
