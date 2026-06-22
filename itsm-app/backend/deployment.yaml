@@ -22,43 +22,9 @@ spec:
           image: ay0unx/itsm-backend:latest
           ports:
             - containerPort: 8080
-          env:
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: DATABASE_URL
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: JWT_SECRET
-            - name: JWT_REFRESH_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: JWT_REFRESH_SECRET
-            - name: WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: WEBHOOK_SECRET
-            - name: POSE_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: POSE_API_TOKEN
-            - name: PRITUNL_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: PRITUNL_USERNAME
-            - name: PRITUNL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: itsm-secrets
-                  key: PRITUNL_PASSWORD
           envFrom:
+            - secretRef:
+                name: itsm-secrets
             - configMapRef:
                 name: itsm-config
           resources:
