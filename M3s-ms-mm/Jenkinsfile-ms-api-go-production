@@ -1,0 +1,238 @@
+pipeline {
+    agent any
+
+    environment {
+        // Git
+        REPO_URL          = 'https://github.com/PCS-Indonesia/brifms_23-05-ms-api-go.git'
+        GIT_CREDENTIAL_ID = 'github-token'
+        BRANCH            = 'master'
+
+        // Docker
+        DOCKER_IMAGE = 'devopspcs/ms-api-go:latest'
+
+        // SSH
+        SSH_CREDENTIAL_ID = 'jenkins-ssh'
+        REMOTE_USER       = 'jenkins'
+
+        // Vault
+        VAULT_ADDR  = 'http://10.184.20.4:8200'
+        VAULT_TOKEN = credentials('vault-token')
+
+        // Service Account
+        SERVICE_ACCOUNT_FILE = 'service_account_credential.json'
+
+        // Notification
+        GOOGLE_CHAT_WEBHOOK = 'https://chat.googleapis.com/v1/spaces/AAAAszcp4X0/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=UwTHtNdi8z_jCatjQwkOuA9vXq3yn0dSsi8oR9Iu4QY'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "📥 Cloning repository..."
+                checkout scmGit(
+                    branches: [[name: env.BRANCH]],
+                    userRemoteConfigs: [[
+                        url: env.REPO_URL,
+                        credentialsId: env.GIT_CREDENTIAL_ID
+                    ]]
+                )
+            }
+        }
+
+        stage('Deploy to All Servers') {
+            steps {
+                script {
+                    // Define server configurations
+                    def servers = [
+                        // TODO: Uncomment Server 1 setelah fix permission (chown -R jenkins:jenkins /home/adminpcs/app/new-ms-api/)
+                         [
+                             name: 'Server 1',
+                             host: '10.184.20.115',
+                             remoteDir: '/home/jenkins/workspace/new-ms-api',
+                             vaultSecretPath: 'production/data/m3s/ms/api/docker-compose',
+                             vaultServiceAccountPath: 'production/data/m3s/ms/api/service_account_credentials'
+                         ],
+                        // TODO: Uncomment Server 2 setelah fix permission (chown -R jenkins:jenkins /home/adminpcs/app/new-ms-api/)
+                         [
+                             name: 'Server 2',
+                             host: '10.184.20.116',
+                             remoteDir: '/home/jenkins/workspace/new-ms-api',
+                             vaultSecretPath: 'production/data/m3s/ms/api2/docker-compose',
+                             vaultServiceAccountPath: 'production/data/m3s/ms/api2/service_account_credential'
+                         ],
+                        [
+                            name: 'Server 3',
+                            host: '10.10.2.103',
+                            remoteDir: '/home/jenkins/workspace/new-ms-api',
+                            vaultSecretPath: 'production/data/m3s/ms/api3/docker-compose',
+                            vaultServiceAccountPath: 'production/data/m3s/ms/api3/service_account_credential'
+                        ]
+                    ]
+
+                    for (server in servers) {
+                        echo "🚀 Starting deployment to ${server.name} (${server.host})..."
+
+                        // 1. Fetch Service Account from Vault
+                        echo "🔐 Fetching service account for ${server.name}..."
+                        def saResponse = httpRequest(
+                            httpMode: 'GET',
+                            url: "${env.VAULT_ADDR}/v1/${server.vaultServiceAccountPath}",
+                            customHeaders: [[name: 'X-Vault-Token', value: env.VAULT_TOKEN]],
+                            validResponseCodes: '200'
+                        )
+
+                        def saJson = readJSON(text: saResponse.content)
+                        def serviceAccountContent = saJson.data.data.context
+                        if (!serviceAccountContent) {
+                            error "🚨 Service Account JSON not found in Vault for ${server.name}."
+                        }
+                        writeFile file: "${WORKSPACE}/${env.SERVICE_ACCOUNT_FILE}", text: serviceAccountContent
+                        echo "✅ Service account written for ${server.name}."
+
+                        // 2. Fetch Secrets from Vault & Generate Docker Compose
+                        echo "🔄 Fetching secrets for ${server.name}..."
+                        def vaultResponse = httpRequest(
+                            httpMode: 'GET',
+                            url: "${env.VAULT_ADDR}/v1/${server.vaultSecretPath}",
+                            customHeaders: [[name: 'X-Vault-Token', value: env.VAULT_TOKEN]],
+                            validResponseCodes: '200'
+                        )
+
+                        def jsonResponse = readJSON(text: vaultResponse.content)
+                        def secrets = jsonResponse.data.data
+                        if (!secrets) {
+                            error "🚨 No secrets found in Vault for ${server.name} at ${server.vaultSecretPath}."
+                        }
+
+                        // Build environment list from Vault secrets (key uppercase)
+                        def envLines = []
+                        secrets.each { key, value ->
+                            envLines.add("      - ${key.toUpperCase()}=${value.toString()}")
+                        }
+                        // Add service account file path
+                        envLines.add("      - GOOGLE_CREDENTIALS_FILE=service_account_credential.json")
+
+                        def serviceName = env.JOB_BASE_NAME ?: 'production-ms-api'
+                        def appPort = secrets.app_port ?: '8002'
+
+                        def dockerComposeContent = """\
+services:
+  ${serviceName}:
+    image: ${env.DOCKER_IMAGE}
+    container_name: ${serviceName}
+    environment:
+${envLines.join('\n')}
+    ports:
+      - "${appPort}:${appPort}"
+    restart: unless-stopped
+    volumes:
+      - ./service_account_credential.json:/app/service_account_credential.json
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "1"
+"""
+
+                        writeFile file: "${WORKSPACE}/docker-compose-deploy.yml", text: dockerComposeContent
+                        echo "✅ Docker Compose prepared for ${server.name}."
+
+                        // 3. Write files directly to remote server via SSH
+                        echo "📦 Writing files to ${server.name}..."
+                        sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                            // Ensure remote directory exists
+                            sh """
+                                ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${server.host} \
+                                'mkdir -p ${server.remoteDir}'
+                            """
+
+                            // Write docker-compose.yml to remote server
+                            sh """
+                                cat '${WORKSPACE}/docker-compose-deploy.yml' | ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${server.host} 'cat > ${server.remoteDir}/docker-compose.yml'
+                            """
+
+                            // Write service account JSON to remote server
+                            sh """
+                                cat '${WORKSPACE}/${env.SERVICE_ACCOUNT_FILE}' | ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${server.host} 'cat > ${server.remoteDir}/${env.SERVICE_ACCOUNT_FILE}'
+                            """
+
+                            // 4. Deploy
+                            echo "🐳 Deploying on ${server.name}..."
+                            sh """
+                                ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${server.host} \
+                                'cd ${server.remoteDir} && \
+                                 sudo docker compose pull && \
+                                 sudo docker compose up -d && \
+                                 sudo docker image prune --filter="dangling=true" -f'
+                            """
+                        }
+
+                        echo "✅ Deployment to ${server.name} completed!"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            node('') {
+                cleanWs()
+            }
+        }
+        success {
+            node('') {
+                script {
+                    sendNotification("✅ Production Deploy Successful!")
+                }
+            }
+        }
+        failure {
+            node('') {
+                script {
+                    sendNotification("❌ Production Deploy Failed!")
+                }
+            }
+        }
+    }
+}
+
+def sendNotification(String messageText) {
+    wrap([$class: 'BuildUser']) {
+        def user = env.BUILD_USER ?: 'unknown'
+        def message = [
+            'cards': [[
+                'header': [
+                    'title': "(Production) ms-api-go Deploy",
+                    'subtitle': "Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                    'imageUrl': "https://bucket.pcsindonesia.com/icon/m3s-icon.png",
+                    'imageStyle': "IMAGE"
+                ],
+                'sections': [[
+                    'widgets': [
+                        ['textParagraph': ['text': messageText]],
+                        ['keyValue': ['topLabel': "Job Name", 'content': env.JOB_NAME]],
+                        ['keyValue': ['topLabel': "Build URL", 'content': env.BUILD_URL]],
+                        ['keyValue': ['topLabel': "Triggered by", 'content': user]]
+                    ]
+                ]]
+            ]]
+        ]
+
+        try {
+            httpRequest(
+                httpMode: 'POST',
+                contentType: 'APPLICATION_JSON',
+                requestBody: groovy.json.JsonOutput.toJson(message),
+                url: env.GOOGLE_CHAT_WEBHOOK
+            )
+        } catch (Exception e) {
+            echo "⚠️ Failed to send notification: ${e.message}"
+        }
+    }
+}

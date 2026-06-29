@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: m3s-mm-api
+  labels:
+    app: mm-api
+    project: m3s

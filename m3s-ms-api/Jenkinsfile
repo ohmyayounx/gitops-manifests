@@ -1,0 +1,171 @@
+/**
+ * CI/CD Pipeline: ms-api-go (Development)
+ *
+ * Flow:
+ * 1. Jenkins: Checkout source code
+ * 2. Jenkins: Build Docker image & push to DockerHub
+ * 3. Jenkins: Update image tag di gitops-manifests repo
+ * 4. ArgoCD: Detect perubahan di Git → auto-sync ke K3s cluster
+ * 5. External Secrets Operator: Sync secrets dari Vault ke K8s
+ *
+ * Tidak perlu lagi SSH ke server atau manual kubectl!
+ */
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Application version (kosongkan untuk pakai BUILD_NUMBER)')
+    }
+
+    environment {
+        // Source code repo
+        APP_REPO_URL      = 'https://github.com/PCS-Indonesia/brifms_23-05-ms-api-go.git'
+        GIT_CREDENTIAL_ID = 'github-token'
+        APP_BRANCH        = 'dev'
+
+        // GitOps manifest repo
+        GITOPS_REPO_URL = 'https://github.com/ohmyayounx/gitops-manifests.git'
+        GITOPS_BRANCH   = 'main'
+
+        // Docker
+        DOCKER_IMAGE         = 'devopspcs/ms-api-go'
+        DOCKER_CREDENTIAL_ID = 'dockerhub-auth'
+
+        // Notification
+        GOOGLE_CHAT_WEBHOOK = 'https://chat.googleapis.com/v1/spaces/AAAAszcp4X0/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=UwTHtNdi8z_jCatjQwkOuA9vXq3yn0dSsi8oR9Iu4QY'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+        stage('Determine Version') {
+            steps {
+                script {
+                    env.IMAGE_TAG = params.APP_VERSION?.trim() ? params.APP_VERSION : "build-${BUILD_NUMBER}"
+                    echo "📋 Version: ${env.IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Checkout App Source') {
+            steps {
+                echo "📥 Cloning application repository..."
+                checkout scmGit(
+                    branches: [[name: env.APP_BRANCH]],
+                    userRemoteConfigs: [[url: env.APP_REPO_URL, credentialsId: env.GIT_CREDENTIAL_ID]]
+                )
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            steps {
+                script {
+                    def fullImage = "${env.DOCKER_IMAGE}:${env.IMAGE_TAG}"
+
+                    withCredentials([usernamePassword(
+                        credentialsId: env.DOCKER_CREDENTIAL_ID,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+                    }
+
+                    echo "🔨 Building: ${fullImage}"
+                    sh "DOCKER_BUILDKIT=1 docker build -f Dockerfile.sample -t ${fullImage} ."
+                    sh "docker tag ${fullImage} ${env.DOCKER_IMAGE}:latest"
+
+                    echo "📤 Pushing to DockerHub..."
+                    sh "docker push ${fullImage}"
+                    sh "docker push ${env.DOCKER_IMAGE}:latest"
+                }
+            }
+        }
+
+        stage('Update GitOps Manifest') {
+            steps {
+                script {
+                    echo "📝 Updating deployment manifest with new image tag..."
+
+                    // Clone gitops repo in a subdirectory
+                    dir('gitops') {
+                        checkout scmGit(
+                            branches: [[name: env.GITOPS_BRANCH]],
+                            userRemoteConfigs: [[url: env.GITOPS_REPO_URL, credentialsId: env.GIT_CREDENTIAL_ID]]
+                        )
+
+                        // Update image tag in deployment manifest
+                        sh """
+                            sed -i 's|image: ${env.DOCKER_IMAGE}:.*|image: ${env.DOCKER_IMAGE}:${env.IMAGE_TAG}|' m3s-ms-api/02-deployment.yaml
+                        """
+
+                        // Commit and push
+                        withCredentials([usernamePassword(
+                            credentialsId: env.GIT_CREDENTIAL_ID,
+                            usernameVariable: 'GIT_USER',
+                            passwordVariable: 'GIT_TOKEN'
+                        )]) {
+                            sh """
+                                git config user.email "jenkins@pcsindonesia.com"
+                                git config user.name "Jenkins CI"
+                                git add m3s-ms-api/02-deployment.yaml
+                                git diff --cached --quiet && echo "No changes to commit" && exit 0
+                                git commit -m "ci(ms-api): update image to ${env.DOCKER_IMAGE}:${env.IMAGE_TAG}"
+                                git push https://\${GIT_USER}:\${GIT_TOKEN}@github.com/ohmyayounx/gitops-manifests.git ${env.GITOPS_BRANCH}
+                            """
+                        }
+                    }
+
+                    echo "✅ GitOps manifest updated - ArgoCD will auto-sync!"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${env.DOCKER_IMAGE}:${env.IMAGE_TAG} || true"
+            sh "docker rmi ${env.DOCKER_IMAGE}:latest || true"
+            cleanWs()
+        }
+        success {
+            script { sendNotification("✅ CI Successful! ArgoCD deploying ${env.DOCKER_IMAGE}:${env.IMAGE_TAG}") }
+        }
+        failure {
+            script { sendNotification("❌ CI Failed!") }
+        }
+    }
+}
+
+def sendNotification(String messageText) {
+    def message = [
+        'cards': [[
+            'header': [
+                'title': "(Development-K3s) ms-api-go CI/CD",
+                'subtitle': "Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                'imageUrl': "https://bucket.pcsindonesia.com/icon/m3s-icon.png",
+                'imageStyle': "IMAGE"
+            ],
+            'sections': [[
+                'widgets': [
+                    ['textParagraph': ['text': messageText]],
+                    ['keyValue': ['topLabel': "Image", 'content': "${env.DOCKER_IMAGE}:${env.IMAGE_TAG}"]],
+                    ['keyValue': ['topLabel': "Build URL", 'content': env.BUILD_URL]]
+                ]
+            ]]
+        ]]
+    ]
+
+    try {
+        httpRequest(
+            httpMode: 'POST',
+            contentType: 'APPLICATION_JSON',
+            requestBody: groovy.json.JsonOutput.toJson(message),
+            url: env.GOOGLE_CHAT_WEBHOOK
+        )
+    } catch (Exception e) {
+        echo "⚠️ Failed to send notification: ${e.message}"
+    }
+}

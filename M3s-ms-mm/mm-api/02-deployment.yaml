@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mm-api
+  namespace: mm-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mm-api
+  template:
+    metadata:
+      labels:
+        app: mm-api
+    spec:
+      containers:
+        - name: mm-api
+          image: devopspcs/mm-api-go:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - secretRef:
+                name: mm-api-env
+          env:
+            - name: GOOGLE_CREDENTIALS_FILE
+              value: "/app/service_account_credential.json"
+          volumeMounts:
+            - name: gcp-credentials
+              mountPath: /app/service_account_credential.json
+              subPath: service_account_credential.json
+              readOnly: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      volumes:
+        - name: gcp-credentials
+          secret:
+            secretName: mm-api-gcp-credentials
