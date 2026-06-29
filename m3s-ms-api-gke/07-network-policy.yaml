@@ -1,0 +1,41 @@
+# Network Policy - restrict traffic (GKE harus enable network policy)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ms-api-network-policy
+  namespace: m3s-ms-api
+spec:
+  podSelector:
+    matchLabels:
+      app: ms-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic dari Ingress controller (GCE Load Balancer)
+    - ports:
+        - port: 8002
+          protocol: TCP
+  egress:
+    # Allow DNS
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow ke database (10.20.0.5)
+    - to:
+        - ipBlock:
+            cidr: 10.20.0.5/32
+      ports:
+        - port: 3306
+          protocol: TCP
+    # Allow HTTPS (external APIs, GCP services)
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP

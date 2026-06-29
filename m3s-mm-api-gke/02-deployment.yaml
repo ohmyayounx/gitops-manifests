@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mm-api
+  namespace: m3s-mm-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mm-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: mm-api
+        project: m3s
+    spec:
+      serviceAccountName: mm-api-sa
+      containers:
+        - name: mm-api
+          image: devopspcs/mm-api-go:latest
+          ports:
+            - containerPort: 8002
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: mm-api-env
+          env:
+            - name: GOOGLE_CREDENTIALS_FILE
+              value: "/app/service_account_credential.json"
+          volumeMounts:
+            - name: gcp-credentials
+              mountPath: /app/service_account_credential.json
+              subPath: service_account_credential.json
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+      volumes:
+        - name: gcp-credentials
+          secret:
+            secretName: mm-api-gcp-credentials
+      imagePullSecrets:
+        - name: dockerhub-pull

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mm-api
+  namespace: m3s-mm-api
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: ClusterIP
+  selector:
+    app: mm-api
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
+      protocol: TCP

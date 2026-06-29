@@ -1,0 +1,169 @@
+/**
+ * CI/CD Pipeline: ms-api-go (GKE Production)
+ *
+ * Flow:
+ * 1. Jenkins: Checkout source code
+ * 2. Jenkins: Build Docker image & push to DockerHub (atau GCR/Artifact Registry)
+ * 3. Jenkins: Update image tag di gitops-manifests repo
+ * 4. ArgoCD: Detect perubahan → auto-sync ke GKE cluster
+ * 5. External Secrets Operator: Sync secrets dari GCP Secret Manager
+ */
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Version (kosongkan = BUILD_NUMBER)')
+    }
+
+    environment {
+        // Source code repo
+        APP_REPO_URL      = 'https://github.com/PCS-Indonesia/brifms_23-05-ms-api-go.git'
+        GIT_CREDENTIAL_ID = 'github-token'
+        APP_BRANCH        = 'master'
+
+        // GitOps manifest repo
+        GITOPS_REPO_URL = 'https://github.com/ohmyayounx/gitops-manifests.git'
+        GITOPS_BRANCH   = 'main'
+
+        // Docker - bisa pakai DockerHub atau GCP Artifact Registry
+        DOCKER_IMAGE         = 'devopspcs/ms-api-go'
+        DOCKER_CREDENTIAL_ID = 'dockerhub-auth'
+
+        // Untuk GCP Artifact Registry (uncomment jika mau migrate):
+        // DOCKER_IMAGE = 'asia-southeast2-docker.pkg.dev/it-re-492803/m3s/ms-api-go'
+
+        // Notification
+        GOOGLE_CHAT_WEBHOOK = 'https://chat.googleapis.com/v1/spaces/AAAAwBoByKI/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=uPN5Q-oGuL1m-n3klV9gnFP8-qroUrCrJTDoUt-BubE'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+        stage('Determine Version') {
+            steps {
+                script {
+                    env.IMAGE_TAG = params.APP_VERSION?.trim() ? params.APP_VERSION : "v1.0.${BUILD_NUMBER}"
+                    echo "📋 Version: ${env.IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Checkout App Source') {
+            steps {
+                echo "📥 Cloning application repository..."
+                checkout scmGit(
+                    branches: [[name: env.APP_BRANCH]],
+                    userRemoteConfigs: [[url: env.APP_REPO_URL, credentialsId: env.GIT_CREDENTIAL_ID]]
+                )
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            steps {
+                script {
+                    def fullImage = "${env.DOCKER_IMAGE}:${env.IMAGE_TAG}"
+
+                    withCredentials([usernamePassword(
+                        credentialsId: env.DOCKER_CREDENTIAL_ID,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+                    }
+
+                    echo "🔨 Building: ${fullImage}"
+                    sh "DOCKER_BUILDKIT=1 docker build -t ${fullImage} ."
+                    sh "docker tag ${fullImage} ${env.DOCKER_IMAGE}:latest"
+
+                    echo "📤 Pushing to registry..."
+                    sh "docker push ${fullImage}"
+                    sh "docker push ${env.DOCKER_IMAGE}:latest"
+                }
+            }
+        }
+
+        stage('Update GitOps Manifest (GKE)') {
+            steps {
+                script {
+                    echo "📝 Updating GKE deployment manifest..."
+
+                    dir('gitops') {
+                        checkout scmGit(
+                            branches: [[name: env.GITOPS_BRANCH]],
+                            userRemoteConfigs: [[url: env.GITOPS_REPO_URL, credentialsId: env.GIT_CREDENTIAL_ID]]
+                        )
+
+                        // Update image tag di GKE manifest
+                        sh """
+                            sed -i 's|image: ${env.DOCKER_IMAGE}:.*|image: ${env.DOCKER_IMAGE}:${env.IMAGE_TAG}|' m3s-ms-api-gke/02-deployment.yaml
+                        """
+
+                        withCredentials([usernamePassword(
+                            credentialsId: env.GIT_CREDENTIAL_ID,
+                            usernameVariable: 'GIT_USER',
+                            passwordVariable: 'GIT_TOKEN'
+                        )]) {
+                            sh """
+                                git config user.email "jenkins@pcsindonesia.com"
+                                git config user.name "Jenkins CI"
+                                git add m3s-ms-api-gke/02-deployment.yaml
+                                git diff --cached --quiet && echo "No changes" && exit 0
+                                git commit -m "ci(ms-api-gke): deploy ${env.DOCKER_IMAGE}:${env.IMAGE_TAG}"
+                                git push https://\${GIT_USER}:\${GIT_TOKEN}@github.com/ohmyayounx/gitops-manifests.git ${env.GITOPS_BRANCH}
+                            """
+                        }
+                    }
+
+                    echo "✅ GitOps updated → ArgoCD will deploy to GKE!"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${env.DOCKER_IMAGE}:${env.IMAGE_TAG} || true"
+            cleanWs()
+        }
+        success {
+            script { sendNotification("✅ CI Success! Deploying ${env.IMAGE_TAG} to GKE") }
+        }
+        failure {
+            script { sendNotification("❌ CI Failed!") }
+        }
+    }
+}
+
+def sendNotification(String messageText) {
+    def message = [
+        'cards': [[
+            'header': [
+                'title': "(GKE Production) ms-api-go",
+                'subtitle': "Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                'imageUrl': "https://bucket.pcsindonesia.com/icon/m3s-icon.png",
+                'imageStyle': "IMAGE"
+            ],
+            'sections': [[
+                'widgets': [
+                    ['textParagraph': ['text': messageText]],
+                    ['keyValue': ['topLabel': "Image", 'content': "${env.DOCKER_IMAGE}:${env.IMAGE_TAG}"]],
+                    ['keyValue': ['topLabel': "Build URL", 'content': env.BUILD_URL]]
+                ]
+            ]]
+        ]]
+    ]
+
+    try {
+        httpRequest(
+            httpMode: 'POST',
+            contentType: 'APPLICATION_JSON',
+            requestBody: groovy.json.JsonOutput.toJson(message),
+            url: env.GOOGLE_CHAT_WEBHOOK
+        )
+    } catch (Exception e) {
+        echo "⚠️ Notification failed: ${e.message}"
+    }
+}

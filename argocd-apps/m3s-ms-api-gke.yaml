@@ -1,0 +1,26 @@
+# ArgoCD Application untuk GKE cluster
+# destination.server harus diisi dengan GKE cluster endpoint
+# Dapatkan dengan: kubectl cluster-info | grep "control plane"
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: m3s-ms-api-gke
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ohmyayounx/gitops-manifests.git
+    targetRevision: main
+    path: m3s-ms-api-gke
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: m3s-ms-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

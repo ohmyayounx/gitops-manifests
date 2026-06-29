@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: m3s-ms-api
+  labels:
+    app: ms-api
+    project: m3s
+    env: production
